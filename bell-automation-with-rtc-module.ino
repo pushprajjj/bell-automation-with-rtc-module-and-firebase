@@ -90,6 +90,7 @@ bool connectToWiFiFromEEPROM() {
   return WiFi.status() == WL_CONNECTED;
 }
 
+// Function to reset WiFi credentials 
 void resetWiFiCredentials() {
   EEPROM.begin(EEPROM_SIZE);
   
@@ -99,6 +100,53 @@ void resetWiFiCredentials() {
   
   EEPROM.commit();  // Save changes to EEPROM
   Serial.println("Wi-Fi credentials reset!");
+  
+  // Alert user that credentials were reset
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(BELL_PIN, RELAY_ON);  // Turn relay ON
+    delay(300);
+    digitalWrite(BELL_PIN, RELAY_OFF); // Turn relay OFF
+    delay(300);
+  }
+  
+  // Wait a moment, then restart
+  delay(1000);
+  ESP.restart();
+}
+
+// Function to check if the reset button is pressed
+void checkResetButton() {
+  static unsigned long lastDebounceTime = 0;
+  static bool lastButtonState = HIGH;
+  static unsigned long buttonPressStartTime = 0;
+  
+  // Read the current state of the reset button
+  bool buttonState = digitalRead(RESET_BUTTON_PIN);
+  
+  // Check if the button state has changed
+  if (buttonState != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+  
+  // If the button state has been stable for the debounce delay
+  if ((millis() - lastDebounceTime) > 50) {
+    // If the button is pressed (LOW due to INPUT_PULLUP)
+    if (buttonState == LOW) {
+      // If this is the start of a button press, record the time
+      if (lastButtonState == HIGH) {
+        buttonPressStartTime = millis();
+      }
+      
+      // If the button has been held for more than 5 seconds
+      if ((millis() - buttonPressStartTime) > 5000) {
+        Serial.println("Reset button held for 5 seconds - resetting WiFi credentials");
+        resetWiFiCredentials();
+      }
+    }
+  }
+  
+  // Save the current button state for the next comparison
+  lastButtonState = buttonState;
 }
 
 // Save bell schedules to EEPROM
@@ -663,6 +711,9 @@ void setup() {
 void loop() {
   server.handleClient();
   dnsServer.processNextRequest();
+  
+  // Check if reset button is pressed
+  checkResetButton();
   
   // Check if WiFi is connected
   if (WiFi.status() == WL_CONNECTED) {
