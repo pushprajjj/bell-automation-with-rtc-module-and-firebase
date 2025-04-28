@@ -2,8 +2,8 @@
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
 #include <DNSServer.h>
-#include <WiFiUdp.h>
-#include <NTPClient.h>
+#include <Wire.h>
+#include <RTClib.h>
 #include <Firebase_ESP_Client.h>
 #include "addons/TokenHelper.h"
 #include "addons/RTDBHelper.h"
@@ -14,7 +14,9 @@ const byte DNS_PORT = 53;
 // ---------- Config ----------
 #define EEPROM_SIZE 96
 #define RESET_BUTTON_PIN 32  // Define the reset button pin
-#define LED_PIN D1  // LED pin for the bell
+#define BELL_PIN D3  // LED pin for the bell (changed from D1)
+#define SDA_PIN D2   // SDA pin for DS3231 (GPIO4)
+#define SCL_PIN D1   // SCL pin for DS3231 (GPIO5)
 
 // Firebase config
 #define API_KEY "AIzaSyAujt_zf6fCCLEPICef4_VAd7W4rSQshJE"
@@ -24,10 +26,8 @@ const byte DNS_PORT = 53;
 ESP8266WebServer server(80);
 WiFiClient espClient;
 
-// NTP client setup
-WiFiUDP ntpUDP;
-const long utcOffsetInSeconds = 19800; // UTC +5:30 for India
-NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds);
+// RTC DS3231 setup
+RTC_DS3231 rtc;
 
 // Firebase objects
 FirebaseData fbdo;
@@ -282,30 +282,30 @@ void ringBell(int bellNumber) {
   
   if (bellNumber == 1 || bellNumber == 6) {
     // Long ring followed by specific number of short rings
-    digitalWrite(LED_PIN, HIGH);
+    digitalWrite(BELL_PIN, HIGH);
     delay(5000);
-    digitalWrite(LED_PIN, LOW);
+    digitalWrite(BELL_PIN, LOW);
     delay(1000);
     
     for (int j = 0; j < bellNumber; j++) {
-      digitalWrite(LED_PIN, HIGH);
+      digitalWrite(BELL_PIN, HIGH);
       delay(500);
-      digitalWrite(LED_PIN, LOW);
+      digitalWrite(BELL_PIN, LOW);
       delay(500);
     }
   }
   else if (bellNumber == 5 || bellNumber == 9) {
     // Just a long ring
-    digitalWrite(LED_PIN, HIGH);
+    digitalWrite(BELL_PIN, HIGH);
     delay(5000);
-    digitalWrite(LED_PIN, LOW);
+    digitalWrite(BELL_PIN, LOW);
   }
   else {
     // Blink the LED bellNumber times with standard timing
     for (int j = 0; j < bellNumber; j++) {
-      digitalWrite(LED_PIN, HIGH);
+      digitalWrite(BELL_PIN, HIGH);
       delay(500);
-      digitalWrite(LED_PIN, LOW);
+      digitalWrite(BELL_PIN, LOW);
       delay(500);
     }
   }
@@ -316,9 +316,10 @@ void checkAndRingBells() {
     if (Firebase.RTDB.getInt(&fbdo, "/SchoolBell/status")) {
       int status = fbdo.intData();
       if (status == 1) {
-        timeClient.update(); // Update the time
-        int currentHour = timeClient.getHours();
-        int currentMinute = timeClient.getMinutes();
+        // Get current time from RTC
+        DateTime now = rtc.now();
+        int currentHour = now.hour();
+        int currentMinute = now.minute();
         
         Serial.print("Current Time: ");
         Serial.print(currentHour);
@@ -395,11 +396,11 @@ void checkAndRingBells() {
         }
 
         if (!bellRinging) {
-          digitalWrite(LED_PIN, LOW); // Turn the LED off if no bell time matches
+          digitalWrite(BELL_PIN, LOW); // Turn the bell off if no bell time matches
         }
       } else {
         Serial.println("Bell status is off");
-        digitalWrite(LED_PIN, LOW); // Turn the LED off if status is not 1
+        digitalWrite(BELL_PIN, LOW); // Turn the bell off if status is not 1
       }
     } else {
       Serial.println("Failed to get Bell status from Firebase");
@@ -414,9 +415,27 @@ void setup() {
   Serial.begin(115200);
   EEPROM.begin(EEPROM_SIZE);
   
+  // Initialize I2C communication for the DS3231
+  Wire.begin(SDA_PIN, SCL_PIN);
+  
+  // Initialize the RTC
+  if (!rtc.begin()) {
+    Serial.println("Couldn't find RTC! Check wiring.");
+    while (1);
+  }
+  
+  // Uncomment the line below to set the RTC to the date & time this sketch was compiled
+  // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  
+  if (rtc.lostPower()) {
+    Serial.println("RTC lost power, setting to compile time!");
+    // Set the RTC to the date & time this sketch was compiled
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+  
   pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
+  pinMode(BELL_PIN, OUTPUT);
+  digitalWrite(BELL_PIN, LOW);
   
   server.on("/", HTTP_GET, handleRoot);
   server.on("/networks", handleNetworks);
@@ -425,9 +444,6 @@ void setup() {
     startAPMode();
   } else {
     Serial.println("Connected to Wi-Fi");
-    
-    // Initialize the NTPClient
-    timeClient.begin();
     
     // Configure Firebase
     config.api_key = API_KEY;
@@ -445,6 +461,22 @@ void setup() {
     config.token_status_callback = tokenStatusCallback;
     Firebase.begin(&config, &auth);
     Firebase.reconnectWiFi(true);
+    
+    // Display current time from RTC
+    DateTime now = rtc.now();
+    Serial.print("RTC Time: ");
+    Serial.print(now.year(), DEC);
+    Serial.print('/');
+    Serial.print(now.month(), DEC);
+    Serial.print('/');
+    Serial.print(now.day(), DEC);
+    Serial.print(" ");
+    Serial.print(now.hour(), DEC);
+    Serial.print(':');
+    Serial.print(now.minute(), DEC);
+    Serial.print(':');
+    Serial.print(now.second(), DEC);
+    Serial.println();
     
     // Start web server
     server.begin();
