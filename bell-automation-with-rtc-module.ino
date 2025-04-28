@@ -14,9 +14,13 @@ const byte DNS_PORT = 53;
 // ---------- Config ----------
 #define EEPROM_SIZE 96
 #define RESET_BUTTON_PIN 32  // Define the reset button pin
-#define BELL_PIN D3  // LED pin for the bell (changed from D1)
+#define BELL_PIN D3  // Relay pin for the bell (changed from D1)
 #define SDA_PIN D2   // SDA pin for DS3231 (GPIO4)
 #define SCL_PIN D1   // SCL pin for DS3231 (GPIO5)
+
+// Relay states (relay is active-low, meaning LOW turns it ON and HIGH turns it OFF)
+#define RELAY_ON LOW
+#define RELAY_OFF HIGH
 
 // Firebase config
 #define API_KEY "AIzaSyAujt_zf6fCCLEPICef4_VAd7W4rSQshJE"
@@ -282,30 +286,30 @@ void ringBell(int bellNumber) {
   
   if (bellNumber == 1 || bellNumber == 6) {
     // Long ring followed by specific number of short rings
-    digitalWrite(BELL_PIN, HIGH);
+    digitalWrite(BELL_PIN, RELAY_ON);  // Turn relay ON
     delay(5000);
-    digitalWrite(BELL_PIN, LOW);
+    digitalWrite(BELL_PIN, RELAY_OFF); // Turn relay OFF
     delay(1000);
     
     for (int j = 0; j < bellNumber; j++) {
-      digitalWrite(BELL_PIN, HIGH);
+      digitalWrite(BELL_PIN, RELAY_ON);  // Turn relay ON
       delay(500);
-      digitalWrite(BELL_PIN, LOW);
+      digitalWrite(BELL_PIN, RELAY_OFF); // Turn relay OFF
       delay(500);
     }
   }
   else if (bellNumber == 5 || bellNumber == 9) {
     // Just a long ring
-    digitalWrite(BELL_PIN, HIGH);
+    digitalWrite(BELL_PIN, RELAY_ON);  // Turn relay ON
     delay(5000);
-    digitalWrite(BELL_PIN, LOW);
+    digitalWrite(BELL_PIN, RELAY_OFF); // Turn relay OFF
   }
   else {
     // Blink the LED bellNumber times with standard timing
     for (int j = 0; j < bellNumber; j++) {
-      digitalWrite(BELL_PIN, HIGH);
+      digitalWrite(BELL_PIN, RELAY_ON);  // Turn relay ON
       delay(500);
-      digitalWrite(BELL_PIN, LOW);
+      digitalWrite(BELL_PIN, RELAY_OFF); // Turn relay OFF
       delay(500);
     }
   }
@@ -396,17 +400,19 @@ void checkAndRingBells() {
         }
 
         if (!bellRinging) {
-          digitalWrite(BELL_PIN, LOW); // Turn the bell off if no bell time matches
+          digitalWrite(BELL_PIN, RELAY_OFF); // Ensure relay is OFF when not ringing
         }
       } else {
         Serial.println("Bell status is off");
-        digitalWrite(BELL_PIN, LOW); // Turn the bell off if status is not 1
+        digitalWrite(BELL_PIN, RELAY_OFF); // Ensure relay is OFF when bell status is disabled
       }
     } else {
       Serial.println("Failed to get Bell status from Firebase");
+      digitalWrite(BELL_PIN, RELAY_OFF); // Ensure relay is OFF if we can't get Firebase status
     }
   } else {
     Serial.println("Firebase is not ready");
+    digitalWrite(BELL_PIN, RELAY_OFF); // Ensure relay is OFF if Firebase is not ready
   }
 }
 
@@ -414,6 +420,10 @@ void checkAndRingBells() {
 void setup() {
   Serial.begin(115200);
   EEPROM.begin(EEPROM_SIZE);
+  
+  // Initialize the bell pin as OUTPUT and ensure it's OFF by default
+  pinMode(BELL_PIN, OUTPUT);
+  digitalWrite(BELL_PIN, RELAY_OFF); // Ensure relay is OFF during initialization
   
   // Initialize I2C communication for the DS3231
   Wire.begin(SDA_PIN, SCL_PIN);
@@ -434,12 +444,13 @@ void setup() {
   }
   
   pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
-  pinMode(BELL_PIN, OUTPUT);
-  digitalWrite(BELL_PIN, LOW);
   
   server.on("/", HTTP_GET, handleRoot);
   server.on("/networks", handleNetworks);
 
+  // Double-check that relay is still OFF before continuing
+  digitalWrite(BELL_PIN, RELAY_OFF);
+  
   if (!connectToWiFiFromEEPROM()) {
     startAPMode();
   } else {
@@ -480,6 +491,9 @@ void setup() {
     
     // Start web server
     server.begin();
+    
+    // Ensure relay is still OFF after all initialization
+    digitalWrite(BELL_PIN, RELAY_OFF);
   }
 }
 
@@ -490,6 +504,8 @@ void loop() {
   // Only check bells if we're connected to WiFi
   if (WiFi.status() == WL_CONNECTED) {
     checkAndRingBells();
+  } else {
+    digitalWrite(BELL_PIN, RELAY_OFF); // Ensure relay is OFF if WiFi is disconnected
   }
   
   delay(100);
