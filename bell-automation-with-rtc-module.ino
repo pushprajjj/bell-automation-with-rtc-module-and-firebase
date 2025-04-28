@@ -12,11 +12,20 @@ DNSServer dnsServer;
 const byte DNS_PORT = 53;
 
 // ---------- Config ----------
-#define EEPROM_SIZE 96
+#define EEPROM_SIZE 512  // Increased EEPROM size to store bell schedules
 #define RESET_BUTTON_PIN 32  // Define the reset button pin
 #define BELL_PIN D3  // Relay pin for the bell (changed from D1)
 #define SDA_PIN D2   // SDA pin for DS3231 (GPIO4)
 #define SCL_PIN D1   // SCL pin for DS3231 (GPIO5)
+
+// EEPROM address offsets
+#define WIFI_SSID_ADDR 0       // 32 bytes
+#define WIFI_PASS_ADDR 32      // 64 bytes
+#define BELL_ENABLED_ADDR 96   // 1 byte
+#define BELL_SCHEDULE_ADDR 100 // Remaining space for bell schedules
+
+// Maximum number of bell schedules
+#define MAX_BELLS 9
 
 // Relay states (relay is active-low, meaning LOW turns it ON and HIGH turns it OFF)
 #define RELAY_ON LOW
@@ -25,6 +34,17 @@ const byte DNS_PORT = 53;
 // Firebase config
 #define API_KEY "AIzaSyAujt_zf6fCCLEPICef4_VAd7W4rSQshJE"
 #define DATABASE_URL "byte4genodemcu-default-rtdb.firebaseio.com"
+
+// Bell schedule structure
+struct BellSchedule {
+  uint8_t hour;
+  uint8_t minute;
+  uint8_t state;  // 0 = not rung yet, 1 = already rung
+};
+
+// Global bell schedule array
+BellSchedule bellSchedules[MAX_BELLS];
+bool bellEnabled = false;
 
 // ---------- Objects ----------
 ESP8266WebServer server(80);
@@ -42,16 +62,16 @@ bool signupOK = false;
 // ---------- EEPROM ----------
 void saveWiFiCredentials(String ssid, String pass) {
   EEPROM.begin(EEPROM_SIZE);
-  for (int i = 0; i < 32; i++) EEPROM.write(i, i < ssid.length() ? ssid[i] : 0);
-  for (int i = 0; i < 64; i++) EEPROM.write(32 + i, i < pass.length() ? pass[i] : 0);
+  for (int i = 0; i < 32; i++) EEPROM.write(WIFI_SSID_ADDR + i, i < ssid.length() ? ssid[i] : 0);
+  for (int i = 0; i < 64; i++) EEPROM.write(WIFI_PASS_ADDR + i, i < pass.length() ? pass[i] : 0);
   EEPROM.commit();
 }
 
 void loadWiFiCredentials(char* ssid, char* pass) {
   EEPROM.begin(EEPROM_SIZE);
-  for (int i = 0; i < 32; i++) ssid[i] = EEPROM.read(i);
+  for (int i = 0; i < 32; i++) ssid[i] = EEPROM.read(WIFI_SSID_ADDR + i);
   ssid[32] = '\0';
-  for (int i = 0; i < 64; i++) pass[i] = EEPROM.read(32 + i);
+  for (int i = 0; i < 64; i++) pass[i] = EEPROM.read(WIFI_PASS_ADDR + i);
   pass[64] = '\0';
 }
 
@@ -74,11 +94,75 @@ void resetWiFiCredentials() {
   EEPROM.begin(EEPROM_SIZE);
   
   // Reset SSID and password in EEPROM to empty values
-  for (int i = 0; i < 32; i++) EEPROM.write(i, 0);  // Clear SSID
-  for (int i = 0; i < 64; i++) EEPROM.write(32 + i, 0);  // Clear password
+  for (int i = 0; i < 32; i++) EEPROM.write(WIFI_SSID_ADDR + i, 0);  // Clear SSID
+  for (int i = 0; i < 64; i++) EEPROM.write(WIFI_PASS_ADDR + i, 0);  // Clear password
   
   EEPROM.commit();  // Save changes to EEPROM
   Serial.println("Wi-Fi credentials reset!");
+}
+
+// Save bell schedules to EEPROM
+void saveBellSchedulesToEEPROM() {
+  EEPROM.begin(EEPROM_SIZE);
+  
+  // Save bell enabled state
+  EEPROM.write(BELL_ENABLED_ADDR, bellEnabled ? 1 : 0);
+  
+  // Save bell schedules
+  for (int i = 0; i < MAX_BELLS; i++) {
+    int addr = BELL_SCHEDULE_ADDR + (i * 3);  // Each schedule takes 3 bytes
+    EEPROM.write(addr, bellSchedules[i].hour);
+    EEPROM.write(addr + 1, bellSchedules[i].minute);
+    EEPROM.write(addr + 2, 0);  // Always reset state to 0 when saving
+  }
+  
+  EEPROM.commit();
+  Serial.println("Bell schedules saved to EEPROM");
+}
+
+// Load bell schedules from EEPROM
+void loadBellSchedulesFromEEPROM() {
+  EEPROM.begin(EEPROM_SIZE);
+  
+  // Load bell enabled state
+  bellEnabled = EEPROM.read(BELL_ENABLED_ADDR) == 1;
+  
+  // Load bell schedules
+  for (int i = 0; i < MAX_BELLS; i++) {
+    int addr = BELL_SCHEDULE_ADDR + (i * 3);
+    bellSchedules[i].hour = EEPROM.read(addr);
+    bellSchedules[i].minute = EEPROM.read(addr + 1);
+    bellSchedules[i].state = EEPROM.read(addr + 2);
+  }
+  
+  Serial.println("Bell schedules loaded from EEPROM");
+  
+  // Print loaded schedules
+  Serial.println("Bell status: " + String(bellEnabled ? "Enabled" : "Disabled"));
+  for (int i = 0; i < MAX_BELLS; i++) {
+    Serial.print("Bell #");
+    Serial.print(i + 1);
+    Serial.print(": ");
+    Serial.print(bellSchedules[i].hour);
+    Serial.print(":");
+    Serial.print(bellSchedules[i].minute);
+    Serial.print(" (State: ");
+    Serial.print(bellSchedules[i].state);
+    Serial.println(")");
+  }
+}
+
+// Update a specific bell state in EEPROM
+void updateBellStateInEEPROM(int bellIndex, uint8_t state) {
+  if (bellIndex < 0 || bellIndex >= MAX_BELLS) return;
+  
+  EEPROM.begin(EEPROM_SIZE);
+  int addr = BELL_SCHEDULE_ADDR + (bellIndex * 3) + 2;  // Address of state byte
+  EEPROM.write(addr, state);
+  EEPROM.commit();
+  
+  // Update in-memory state too
+  bellSchedules[bellIndex].state = state;
 }
 
 // ---------- Web Config ----------
@@ -315,10 +399,14 @@ void ringBell(int bellNumber) {
   }
 }
 
-void checkAndRingBells() {
+// Function to check and ring bells when online (Firebase available)
+void checkAndRingBellsOnline() {
   if (Firebase.ready() && signupOK) {
+    // Check overall bell system status
     if (Firebase.RTDB.getInt(&fbdo, "/SchoolBell/status")) {
       int status = fbdo.intData();
+      bellEnabled = (status == 1);
+      
       if (status == 1) {
         // Get current time from RTC
         DateTime now = rtc.now();
@@ -331,8 +419,10 @@ void checkAndRingBells() {
         Serial.println(currentMinute);
 
         bool bellRinging = false;
+        bool schedulesUpdated = false;
 
-        for (int i = 1; i <= 9; i++) {
+        for (int i = 1; i <= MAX_BELLS; i++) {
+          int bellIndex = i - 1;  // Convert to 0-based index for our array
           String pathHour = "/SchoolBell/" + String(i) + "/h";
           String pathMinute = "/SchoolBell/" + String(i) + "/m";
           String pathBellState = "/SchoolBell/" + String(i) + "/state";
@@ -342,6 +432,8 @@ void checkAndRingBells() {
           // Retrieve the Bell Hour from Firebase
           if (Firebase.RTDB.getString(&fbdo, pathHour)) {
             bellHour = fbdo.stringData();
+            bellSchedules[bellIndex].hour = bellHour.toInt();
+            schedulesUpdated = true;
           } else {
             Serial.println("Failed to get Bell Hour: " + fbdo.errorReason());
             continue; // Skip to the next iteration
@@ -350,6 +442,8 @@ void checkAndRingBells() {
           // Retrieve the Bell Minute from Firebase
           if (Firebase.RTDB.getString(&fbdo, pathMinute)) {
             bellMinute = fbdo.stringData();
+            bellSchedules[bellIndex].minute = bellMinute.toInt();
+            schedulesUpdated = true;
           } else {
             Serial.println("Failed to get Bell Minute: " + fbdo.errorReason());
             continue; // Skip to the next iteration
@@ -358,15 +452,16 @@ void checkAndRingBells() {
           // Retrieve the Bell State from Firebase
           if (Firebase.RTDB.getString(&fbdo, pathBellState)) {
             bellState = fbdo.stringData();
+            bellSchedules[bellIndex].state = bellState.toInt();
           } else {
             Serial.println("Failed to get Bell State: " + fbdo.errorReason());
             continue; // Skip to the next iteration
           }
 
           // Convert to integers
-          int bellHourInt = bellHour.toInt();
-          int bellMinuteInt = bellMinute.toInt();
-          int bellStateInt = bellState.toInt();
+          int bellHourInt = bellSchedules[bellIndex].hour;
+          int bellMinuteInt = bellSchedules[bellIndex].minute;
+          int bellStateInt = bellSchedules[bellIndex].state;
 
           // Compare current time with Bell time
           if ((currentHour == bellHourInt) && (currentMinute == bellMinuteInt)) {
@@ -380,6 +475,10 @@ void checkAndRingBells() {
                 Serial.println("Failed to update status to 1");
               }
               
+              // Update local state and EEPROM
+              bellSchedules[bellIndex].state = 1;
+              updateBellStateInEEPROM(bellIndex, 1);
+              
               delay(60000); // Wait a minute before resetting state
 
               // Reset status back to 0 in Firebase Realtime Database
@@ -388,6 +487,10 @@ void checkAndRingBells() {
               } else {
                 Serial.println("Failed to update status to 0");
               }
+              
+              // Update local state and EEPROM
+              bellSchedules[bellIndex].state = 0;
+              updateBellStateInEEPROM(bellIndex, 0);
 
               bellRinging = true;
               break; // Stop checking further times once a match is found
@@ -397,6 +500,11 @@ void checkAndRingBells() {
           } else {
             Serial.println("No Bell Scheduled for " + String(i));
           }
+        }
+
+        // If schedules were updated from Firebase, save them to EEPROM
+        if (schedulesUpdated) {
+          saveBellSchedulesToEEPROM();
         }
 
         if (!bellRinging) {
@@ -413,6 +521,58 @@ void checkAndRingBells() {
   } else {
     Serial.println("Firebase is not ready");
     digitalWrite(BELL_PIN, RELAY_OFF); // Ensure relay is OFF if Firebase is not ready
+  }
+}
+
+// Function to check and ring bells when offline (using EEPROM saved schedules)
+void checkAndRingBellsOffline() {
+  // Get current time from RTC
+  DateTime now = rtc.now();
+  int currentHour = now.hour();
+  int currentMinute = now.minute();
+  
+  Serial.print("Offline Mode - Current Time: ");
+  Serial.print(currentHour);
+  Serial.print(":");
+  Serial.println(currentMinute);
+  
+  // Check if bell system is enabled according to EEPROM
+  if (bellEnabled) {
+    bool bellRinging = false;
+    
+    for (int i = 0; i < MAX_BELLS; i++) {
+      // Compare current time with Bell time
+      if ((currentHour == bellSchedules[i].hour) && (currentMinute == bellSchedules[i].minute)) {
+        if (bellSchedules[i].state == 0) {
+          Serial.print("Offline Mode - Ringing bell #");
+          Serial.println(i + 1);
+          
+          ringBell(i + 1);
+          
+          // Update local state
+          bellSchedules[i].state = 1;
+          updateBellStateInEEPROM(i, 1);
+          
+          delay(60000); // Wait a minute before being eligible for reset
+          
+          // Update local state
+          bellSchedules[i].state = 0;
+          updateBellStateInEEPROM(i, 0);
+          
+          bellRinging = true;
+          break; // Stop checking further times once a match is found
+        } else {
+          Serial.println("Offline Mode - Bell already rung.");
+        }
+      }
+    }
+    
+    if (!bellRinging) {
+      digitalWrite(BELL_PIN, RELAY_OFF); // Ensure relay is OFF when not ringing
+    }
+  } else {
+    Serial.println("Offline Mode - Bell system is disabled");
+    digitalWrite(BELL_PIN, RELAY_OFF); // Ensure relay is OFF when disabled
   }
 }
 
@@ -450,6 +610,9 @@ void setup() {
 
   // Double-check that relay is still OFF before continuing
   digitalWrite(BELL_PIN, RELAY_OFF);
+  
+  // Load bell schedules from EEPROM (to be used if WiFi is not connected)
+  loadBellSchedulesFromEEPROM();
   
   if (!connectToWiFiFromEEPROM()) {
     startAPMode();
@@ -501,10 +664,14 @@ void loop() {
   server.handleClient();
   dnsServer.processNextRequest();
   
-  // Only check bells if we're connected to WiFi
+  // Check if WiFi is connected
   if (WiFi.status() == WL_CONNECTED) {
-    checkAndRingBells();
+    // If online, check bells using Firebase data and update EEPROM
+    checkAndRingBellsOnline();
   } else {
+    // If offline, check bells using saved schedules from EEPROM
+    Serial.println("WiFi not connected - using saved bell schedules from EEPROM");
+    checkAndRingBellsOffline();
     digitalWrite(BELL_PIN, RELAY_OFF); // Ensure relay is OFF if WiFi is disconnected
   }
   
