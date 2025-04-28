@@ -293,9 +293,9 @@ void ringBell(int bellNumber) {
     
     for (int j = 0; j < bellNumber; j++) {
       digitalWrite(BELL_PIN, RELAY_ON);  // Turn relay ON
-      delay(500);
+      delay(1000);
       digitalWrite(BELL_PIN, RELAY_OFF); // Turn relay OFF
-      delay(500);
+      delay(1000);
     }
   }
   else if (bellNumber == 5 || bellNumber == 9) {
@@ -308,9 +308,9 @@ void ringBell(int bellNumber) {
     // Blink the LED bellNumber times with standard timing
     for (int j = 0; j < bellNumber; j++) {
       digitalWrite(BELL_PIN, RELAY_ON);  // Turn relay ON
-      delay(500);
+      delay(1000);
       digitalWrite(BELL_PIN, RELAY_OFF); // Turn relay OFF
-      delay(500);
+      delay(1000);
     }
   }
 }
