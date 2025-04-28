@@ -12,26 +12,26 @@ DNSServer dnsServer;
 const byte DNS_PORT = 53;
 
 // ---------- Config ----------
-#define EEPROM_SIZE 512  // Increased EEPROM size to store bell schedules
-#define RESET_BUTTON_PIN D0  // Reset button pin on D0 (GPIO16)
-#define BELL_PIN D3  // Relay pin for the bell (changed from D1)
-#define SDA_PIN D2   // SDA pin for DS3231 (GPIO4)
-#define SCL_PIN D1   // SCL pin for DS3231 (GPIO5)
+#define EEPROM_SIZE 512  
+#define RESET_BUTTON_PIN D0  
+#define BELL_PIN D3  
+#define SDA_PIN D2   
+#define SCL_PIN D1   
 
 // EEPROM address offsets
-#define WIFI_SSID_ADDR 0       // 32 bytes
-#define WIFI_PASS_ADDR 32      // 64 bytes
-#define BELL_ENABLED_ADDR 96   // 1 byte
-#define BELL_SCHEDULE_ADDR 100 // Remaining space for bell schedules
+#define WIFI_SSID_ADDR 0       
+#define WIFI_PASS_ADDR 32     
+#define BELL_ENABLED_ADDR 96 
+#define BELL_SCHEDULE_ADDR 100 
 
-// Maximum number of bell schedules
+
 #define MAX_BELLS 9
 
-// Relay states (relay is active-low, meaning LOW turns it ON and HIGH turns it OFF)
+
 #define RELAY_ON LOW
 #define RELAY_OFF HIGH
 
-// Firebase config
+
 #define API_KEY "AIzaSyAujt_zf6fCCLEPICef4_VAd7W4rSQshJE"
 #define DATABASE_URL "byte4genodemcu-default-rtdb.firebaseio.com"
 
