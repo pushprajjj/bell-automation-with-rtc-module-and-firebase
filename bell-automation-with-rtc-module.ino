@@ -13,7 +13,7 @@ const byte DNS_PORT = 53;
 
 // ---------- Config ----------
 #define EEPROM_SIZE 512  // Increased EEPROM size to store bell schedules
-#define RESET_BUTTON_PIN 32  // Define the reset button pin
+#define RESET_BUTTON_PIN D0  // Reset button pin on D0 (GPIO16)
 #define BELL_PIN D3  // Relay pin for the bell (changed from D1)
 #define SDA_PIN D2   // SDA pin for DS3231 (GPIO4)
 #define SCL_PIN D1   // SCL pin for DS3231 (GPIO5)
@@ -633,6 +633,9 @@ void setup() {
   pinMode(BELL_PIN, OUTPUT);
   digitalWrite(BELL_PIN, RELAY_OFF); // Ensure relay is OFF during initialization
   
+  // Initialize reset button pin with internal pull-up resistor
+  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
+  
   // Initialize I2C communication for the DS3231
   Wire.begin(SDA_PIN, SCL_PIN);
   
@@ -650,8 +653,6 @@ void setup() {
     // Set the RTC to the date & time this sketch was compiled
     rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
   }
-  
-  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
   
   server.on("/", HTTP_GET, handleRoot);
   server.on("/networks", handleNetworks);
