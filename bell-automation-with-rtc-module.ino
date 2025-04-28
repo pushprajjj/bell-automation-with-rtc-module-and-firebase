@@ -2,18 +2,38 @@
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
 #include <DNSServer.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+#include <Firebase_ESP_Client.h>
+#include "addons/TokenHelper.h"
+#include "addons/RTDBHelper.h"
 
 DNSServer dnsServer;
 const byte DNS_PORT = 53;
 
 // ---------- Config ----------
 #define EEPROM_SIZE 96
-
 #define RESET_BUTTON_PIN 32  // Define the reset button pin
+#define LED_PIN D1  // LED pin for the bell
+
+// Firebase config
+#define API_KEY "AIzaSyAujt_zf6fCCLEPICef4_VAd7W4rSQshJE"
+#define DATABASE_URL "byte4genodemcu-default-rtdb.firebaseio.com"
 
 // ---------- Objects ----------
 ESP8266WebServer server(80);
 WiFiClient espClient;
+
+// NTP client setup
+WiFiUDP ntpUDP;
+const long utcOffsetInSeconds = 19800; // UTC +5:30 for India
+NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds);
+
+// Firebase objects
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+bool signupOK = false;
 
 // ---------- EEPROM ----------
 void saveWiFiCredentials(String ssid, String pass) {
@@ -256,25 +276,189 @@ void startAPMode() {
   Serial.println("Open: http://" + IP.toString());
 }
 
+// ---------- Bell Functions ----------
+void ringBell(int bellNumber) {
+  Serial.println("Bell ringing started for bell #" + String(bellNumber));
+  
+  if (bellNumber == 1 || bellNumber == 6) {
+    // Long ring followed by specific number of short rings
+    digitalWrite(LED_PIN, HIGH);
+    delay(5000);
+    digitalWrite(LED_PIN, LOW);
+    delay(1000);
+    
+    for (int j = 0; j < bellNumber; j++) {
+      digitalWrite(LED_PIN, HIGH);
+      delay(500);
+      digitalWrite(LED_PIN, LOW);
+      delay(500);
+    }
+  }
+  else if (bellNumber == 5 || bellNumber == 9) {
+    // Just a long ring
+    digitalWrite(LED_PIN, HIGH);
+    delay(5000);
+    digitalWrite(LED_PIN, LOW);
+  }
+  else {
+    // Blink the LED bellNumber times with standard timing
+    for (int j = 0; j < bellNumber; j++) {
+      digitalWrite(LED_PIN, HIGH);
+      delay(500);
+      digitalWrite(LED_PIN, LOW);
+      delay(500);
+    }
+  }
+}
+
+void checkAndRingBells() {
+  if (Firebase.ready() && signupOK) {
+    if (Firebase.RTDB.getInt(&fbdo, "/SchoolBell/status")) {
+      int status = fbdo.intData();
+      if (status == 1) {
+        timeClient.update(); // Update the time
+        int currentHour = timeClient.getHours();
+        int currentMinute = timeClient.getMinutes();
+        
+        Serial.print("Current Time: ");
+        Serial.print(currentHour);
+        Serial.print(":");
+        Serial.println(currentMinute);
+
+        bool bellRinging = false;
+
+        for (int i = 1; i <= 9; i++) {
+          String pathHour = "/SchoolBell/" + String(i) + "/h";
+          String pathMinute = "/SchoolBell/" + String(i) + "/m";
+          String pathBellState = "/SchoolBell/" + String(i) + "/state";
+
+          String bellHour, bellMinute, bellState;
+
+          // Retrieve the Bell Hour from Firebase
+          if (Firebase.RTDB.getString(&fbdo, pathHour)) {
+            bellHour = fbdo.stringData();
+          } else {
+            Serial.println("Failed to get Bell Hour: " + fbdo.errorReason());
+            continue; // Skip to the next iteration
+          }
+
+          // Retrieve the Bell Minute from Firebase
+          if (Firebase.RTDB.getString(&fbdo, pathMinute)) {
+            bellMinute = fbdo.stringData();
+          } else {
+            Serial.println("Failed to get Bell Minute: " + fbdo.errorReason());
+            continue; // Skip to the next iteration
+          }
+
+          // Retrieve the Bell State from Firebase
+          if (Firebase.RTDB.getString(&fbdo, pathBellState)) {
+            bellState = fbdo.stringData();
+          } else {
+            Serial.println("Failed to get Bell State: " + fbdo.errorReason());
+            continue; // Skip to the next iteration
+          }
+
+          // Convert to integers
+          int bellHourInt = bellHour.toInt();
+          int bellMinuteInt = bellMinute.toInt();
+          int bellStateInt = bellState.toInt();
+
+          // Compare current time with Bell time
+          if ((currentHour == bellHourInt) && (currentMinute == bellMinuteInt)) {
+            if (bellStateInt == 0) {
+              ringBell(i);
+
+              // Update status to 1 in Firebase Realtime Database
+              if (Firebase.RTDB.setInt(&fbdo, "/SchoolBell/" + String(i) + "/state", 1)) {
+                Serial.println("Status updated to 1 successfully!");
+              } else {
+                Serial.println("Failed to update status to 1");
+              }
+              
+              delay(60000); // Wait a minute before resetting state
+
+              // Reset status back to 0 in Firebase Realtime Database
+              if (Firebase.RTDB.setInt(&fbdo, "/SchoolBell/" + String(i) + "/state", 0)) {
+                Serial.println("Status updated to 0 successfully!");
+              } else {
+                Serial.println("Failed to update status to 0");
+              }
+
+              bellRinging = true;
+              break; // Stop checking further times once a match is found
+            } else {
+              Serial.println("Already done.");
+            }
+          } else {
+            Serial.println("No Bell Scheduled for " + String(i));
+          }
+        }
+
+        if (!bellRinging) {
+          digitalWrite(LED_PIN, LOW); // Turn the LED off if no bell time matches
+        }
+      } else {
+        Serial.println("Bell status is off");
+        digitalWrite(LED_PIN, LOW); // Turn the LED off if status is not 1
+      }
+    } else {
+      Serial.println("Failed to get Bell status from Firebase");
+    }
+  } else {
+    Serial.println("Firebase is not ready");
+  }
+}
+
 // ---------- Setup ----------
 void setup() {
   Serial.begin(115200);
   EEPROM.begin(EEPROM_SIZE);
   
- pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
-
-  server.on("/", handleRoot);
+  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  
+  server.on("/", HTTP_GET, handleRoot);
   server.on("/networks", handleNetworks);
 
   if (!connectToWiFiFromEEPROM()) {
     startAPMode();
   } else {
     Serial.println("Connected to Wi-Fi");
+    
+    // Initialize the NTPClient
+    timeClient.begin();
+    
+    // Configure Firebase
+    config.api_key = API_KEY;
+    config.database_url = DATABASE_URL;
+    
+    // Firebase sign-up
+    if (Firebase.signUp(&config, &auth, "", "")) {
+      Serial.println("Firebase sign-up successful");
+      signupOK = true;
+    } else {
+      Serial.printf("Firebase sign-up failed: %s\n", config.signer.signupError.message.c_str());
+    }
+    
+    // Set token status callback
+    config.token_status_callback = tokenStatusCallback;
+    Firebase.begin(&config, &auth);
+    Firebase.reconnectWiFi(true);
+    
+    // Start web server
+    server.begin();
   }
 }
 
 void loop() {
   server.handleClient();
   dnsServer.processNextRequest();
+  
+  // Only check bells if we're connected to WiFi
+  if (WiFi.status() == WL_CONNECTED) {
+    checkAndRingBells();
+  }
+  
   delay(100);
 }
